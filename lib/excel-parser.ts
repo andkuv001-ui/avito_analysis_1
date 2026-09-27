@@ -10,6 +10,7 @@ export interface SegmentStats {
   count: number;
   min: number;
   max: number;
+  avg: number;
   median: number;
   p25: number;
   p75: number;
@@ -175,10 +176,12 @@ function topCategories(
 function segmentStats(prices: number[]): SegmentStats | null {
   if (prices.length === 0) return null;
   const sorted = [...prices].sort((a, b) => a - b);
+  const avg = sorted.reduce((sum, v) => sum + v, 0) / sorted.length;
   return {
     count: sorted.length,
     min: round2(sorted[0]),
     max: round2(sorted[sorted.length - 1]),
+    avg: round2(avg),
     median: round2(percentile(sorted, 0.5)),
     p25: round2(percentile(sorted, 0.25)),
     p75: round2(percentile(sorted, 0.75)),
