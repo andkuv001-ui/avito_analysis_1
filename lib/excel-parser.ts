@@ -14,6 +14,7 @@ export interface SegmentStats {
   median: number;
   p25: number;
   p75: number;
+  outliers_high: number;
 }
 
 export interface CategoryShare {
@@ -177,6 +178,9 @@ function segmentStats(prices: number[]): SegmentStats | null {
   if (prices.length === 0) return null;
   const sorted = [...prices].sort((a, b) => a - b);
   const avg = sorted.reduce((sum, v) => sum + v, 0) / sorted.length;
+  const p75 = percentile(sorted, 0.75);
+  const outliersHigh =
+    p75 > 0 ? sorted.filter((v) => v > p75 * 5).length : 0;
   return {
     count: sorted.length,
     min: round2(sorted[0]),
@@ -184,7 +188,8 @@ function segmentStats(prices: number[]): SegmentStats | null {
     avg: round2(avg),
     median: round2(percentile(sorted, 0.5)),
     p25: round2(percentile(sorted, 0.25)),
-    p75: round2(percentile(sorted, 0.75)),
+    p75: round2(p75),
+    outliers_high: outliersHigh,
   };
 }
 
