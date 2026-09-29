@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateReport } from "@/lib/ai";
 import { parseAndAggregate } from "@/lib/excel-parser";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { reportFileSchema } from "@/lib/validation";
+import { parseTimeSchema, reportFileSchema } from "@/lib/validation";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 240;
 
 export async function POST(req: NextRequest) {
   const ip =
@@ -18,10 +18,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let parsedFile: ReturnType<typeof reportFileSchema.safeParse>;
+  let form: FormData;
   try {
-    const form = await req.formData();
-    parsedFile = reportFileSchema.safeParse(form.get("file"));
+    form = await req.formData();
   } catch {
     return NextResponse.json(
       { error: "Не удалось прочитать запрос. Ожидается FormData с файлом." },
@@ -29,6 +28,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const parsedFile = reportFileSchema.safeParse(form.get("file"));
   if (!parsedFile.success) {
     return NextResponse.json(
       { error: parsedFile.error.errors[0]?.message ?? "Некорректный файл" },
@@ -36,10 +36,25 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const rawParsedAt = form.get("parsed_at");
+  const parsedAt = parseTimeSchema.safeParse(
+    typeof rawParsedAt === "string" ? rawParsedAt : ""
+  );
+  if (!parsedAt.success) {
+    return NextResponse.json(
+      {
+        error:
+          parsedAt.error.errors[0]?.message ??
+          "Укажите время выгрузки в формате ЧЧ:ММ",
+      },
+      { status: 400 }
+    );
+  }
+
   try {
     const buffer = Buffer.from(await parsedFile.data.arrayBuffer());
-    const metrics = parseAndAggregate(buffer);
-    const report = await generateReport(metrics);
+    const metrics = parseAndAggregate(buffer, parsedAt.data);
+    const { report, warnings } = await generateReport(metrics);
 
     return NextResponse.json({
       success: true,
@@ -49,6 +64,9 @@ export async function POST(req: NextRequest) {
         valid_rows: metrics.file.valid_rows,
         skipped_rows: metrics.file.skipped_rows,
         unique_sellers: metrics.market.unique_sellers,
+        parsed_at: metrics.parse.parsed_at,
+        views_per_day_status: metrics.demand.views_per_day_status,
+        report_warnings: warnings,
       },
     });
   } catch (error) {

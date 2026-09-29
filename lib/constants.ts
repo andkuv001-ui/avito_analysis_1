@@ -17,3 +17,15 @@ export const PER_UNIT_REGEX =
 
 export const SERVICE_REGEX =
   /услуг|работ|монтаж|установк|под\s*ключ|ремонт|пошив|изготовлени|на\s*заказ|аренд|прокат|обслуживани|диагностик/i;
+
+export const FORBIDDEN_PHRASES = [
+  "Создайте уют",
+  "Оживите интерьер",
+  "индивидуальный подход",
+  "высокое качество",
+] as const;
+
+export const DAILY_TRAFFIC_PREFIX = "Ожидаемый дневной трафик:";
+export const INSUFFICIENT_DAILY_NOTE =
+  "Недостаточно данных для суточного прогноза";
+export const MIN_HOURS_FOR_DAILY_FORECAST = 8;

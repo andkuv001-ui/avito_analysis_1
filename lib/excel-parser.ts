@@ -1,10 +1,17 @@
 import * as XLSX from "xlsx";
 import {
   MAX_ROWS,
+  MIN_HOURS_FOR_DAILY_FORECAST,
   MIN_VALID_ROWS,
   REQUIRED_COLUMNS,
 } from "./constants";
 import { classify, type Segment } from "./segmenter";
+
+export interface PriceTiers {
+  economy: number;
+  middle: number;
+  premium: number;
+}
 
 export interface SegmentStats {
   count: number;
@@ -15,6 +22,7 @@ export interface SegmentStats {
   p25: number;
   p75: number;
   outliers_high: number;
+  tiers: PriceTiers;
 }
 
 export interface CategoryShare {
@@ -45,6 +53,10 @@ export interface AggregatedMetrics {
     valid_rows: number;
     skipped_rows: number;
   };
+  parse: {
+    parsed_at: string;
+    hours_since_midnight: number;
+  };
   market: {
     unique_sellers: number;
     verified_seller_share: number;
@@ -57,14 +69,18 @@ export interface AggregatedMetrics {
     views_today_median: number;
     share_with_views_today: number;
     views_total_median: number;
+    views_per_day_projected_median: number | null;
+    views_per_day_projected_max: number | null;
+    views_per_day_status: "ok" | "insufficient";
   };
   prices: Record<Segment, SegmentStats | null>;
+  unclassified_count: number;
   promotion: {
     paid_share: number;
     xl_share: number;
   };
   positions: {
-    median_position: number | null;
+    avg_position: number | null;
     top10_share: number | null;
   };
   categories: {
@@ -178,22 +194,41 @@ function segmentStats(prices: number[]): SegmentStats | null {
   if (prices.length === 0) return null;
   const sorted = [...prices].sort((a, b) => a - b);
   const avg = sorted.reduce((sum, v) => sum + v, 0) / sorted.length;
+  const p25 = percentile(sorted, 0.25);
   const p75 = percentile(sorted, 0.75);
-  const outliersHigh =
-    p75 > 0 ? sorted.filter((v) => v > p75 * 5).length : 0;
+  const outliersHigh = p75 > 0 ? sorted.filter((v) => v > p75 * 5).length : 0;
+  const tiers: PriceTiers = { economy: 0, middle: 0, premium: 0 };
+  for (const v of sorted) {
+    if (v <= p25) tiers.economy += 1;
+    else if (v <= p75) tiers.middle += 1;
+    else tiers.premium += 1;
+  }
   return {
     count: sorted.length,
     min: round2(sorted[0]),
     max: round2(sorted[sorted.length - 1]),
     avg: round2(avg),
     median: round2(percentile(sorted, 0.5)),
-    p25: round2(percentile(sorted, 0.25)),
+    p25: round2(p25),
     p75: round2(p75),
     outliers_high: outliersHigh,
+    tiers,
   };
 }
 
-export function parseAndAggregate(buffer: Buffer): AggregatedMetrics {
+function parseTimeToHours(parsedAt: string): number {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(parsedAt);
+  if (!match) {
+    throw new Error("Некорректное время выгрузки, ожидается формат ЧЧ:ММ");
+  }
+  return Number(match[1]) + Number(match[2]) / 60;
+}
+
+export function parseAndAggregate(
+  buffer: Buffer,
+  parsedAt: string
+): AggregatedMetrics {
+  const hoursSinceMidnight = parseTimeToHours(parsedAt);
   const workbook = XLSX.read(buffer, { type: "buffer" });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) throw new Error("Файл пустой или не содержит листов");
@@ -327,6 +362,50 @@ export function parseAndAggregate(buffer: Buffer): AggregatedMetrics {
     .map((row) => row.position)
     .filter((v): v is number => v !== null);
   const top10 = positions.filter((p) => p <= 10).length;
+  const avgPosition =
+    positions.length > 0
+      ? round2(
+          positions.reduce((sum, v) => sum + v, 0) / positions.length
+        )
+      : null;
+
+  const dailyStatus: "ok" | "insufficient" =
+    hoursSinceMidnight >= MIN_HOURS_FOR_DAILY_FORECAST ? "ok" : "insufficient";
+  let projectedMedian: number | null = null;
+  let projectedMax: number | null = null;
+  if (dailyStatus === "ok") {
+    const projections = valid.map(
+      (row) => (row.views_today / hoursSinceMidnight) * 24
+    );
+    projectedMedian = round2(median(projections));
+    projectedMax = round2(Math.max(...projections));
+  }
+
+  const statsBySeg: Record<Segment, SegmentStats | null> = {
+    per_unit: null,
+    service: null,
+    product: null,
+  };
+  statsBySeg.per_unit = segmentStats(pricesBySeg.per_unit);
+  statsBySeg.service = segmentStats(pricesBySeg.service);
+  statsBySeg.product = segmentStats(pricesBySeg.product);
+
+  const tierSum = (["per_unit", "service", "product"] as const).reduce(
+    (sum, seg) => {
+      const stats = statsBySeg[seg];
+      if (!stats) return sum;
+      return (
+        sum + stats.tiers.economy + stats.tiers.middle + stats.tiers.premium
+      );
+    },
+    0
+  );
+  const unclassifiedCount = valid.filter((row) => row.price <= 1).length;
+  if (tierSum + unclassifiedCount !== valid.length) {
+    throw new Error(
+      "Внутренняя ошибка агрегации: ярусы и Unclassified не сходятся к числу строк"
+    );
+  }
 
   const topTitles: TopTitle[] = [...valid]
     .sort((a, b) => b.price - a.price)
@@ -355,6 +434,10 @@ export function parseAndAggregate(buffer: Buffer): AggregatedMetrics {
       valid_rows: valid.length,
       skipped_rows: skipped,
     },
+    parse: {
+      parsed_at: parsedAt,
+      hours_since_midnight: round2(hoursSinceMidnight),
+    },
     market: {
       unique_sellers: uniqueSellers,
       verified_seller_share: ratio(verifiedSellers, uniqueSellers),
@@ -374,18 +457,18 @@ export function parseAndAggregate(buffer: Buffer): AggregatedMetrics {
         valid.length
       ),
       views_total_median: round2(median(viewsTotal)),
+      views_per_day_projected_median: projectedMedian,
+      views_per_day_projected_max: projectedMax,
+      views_per_day_status: dailyStatus,
     },
-    prices: {
-      per_unit: segmentStats(pricesBySeg.per_unit),
-      service: segmentStats(pricesBySeg.service),
-      product: segmentStats(pricesBySeg.product),
-    },
+    prices: statsBySeg,
+    unclassified_count: unclassifiedCount,
     promotion: {
       paid_share: ratio(valid.filter((row) => row.paid).length, valid.length),
       xl_share: ratio(valid.filter((row) => row.xl).length, valid.length),
     },
     positions: {
-      median_position: positions.length > 0 ? round2(median(positions)) : null,
+      avg_position: avgPosition,
       top10_share:
         positions.length > 0 ? ratio(top10, positions.length) : null,
     },
