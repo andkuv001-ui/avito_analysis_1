@@ -23,7 +23,13 @@ export const FORBIDDEN_PHRASES = [
   "Оживите интерьер",
   "индивидуальный подход",
   "высокое качество",
+  "уникальн",
 ] as const;
+
+export const OPT_WORD_REGEX =
+  /(^|[^0-9a-zа-яё])опт(?!им|ик)[а-яё]*/i;
+
+export const HEADLINE_LINE_REGEX = /^\s*[-*]\s*.*Заголовок/i;
 
 export const DAILY_TRAFFIC_PREFIX = "Ожидаемый дневной трафик:";
 export const INSUFFICIENT_DAILY_NOTE =

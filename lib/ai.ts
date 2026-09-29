@@ -24,6 +24,7 @@ export const SYSTEM_PROMPT = `Ты — Senior Data Analyst и стратег п�
 Просмотры и суточный прогноз (жёсткое правило разделения):
 - Дневной трафик считай только из demand.views_per_day_projected_median и demand.views_per_day_projected_max (проекция «Просмотров сегодня» на полные сутки по времени выгрузки). Никогда не прогнозируй дневной трафик выше views_per_day_projected_max.
 - demand.views_total_median — только накопленный/возрастной спрос (сколько объявление набрало за жизнь), не суточный трафик. Суточные и накопленные числа не смешивай и не переноси одно в другое.
+- demand.share_with_views_today — доля объявлений с ненулевыми просмотрами сегодня (доля позиций, НЕ доля просмотров). Запрещено подписывать её как «доля просмотров сегодня» и умножать на views_total_median.
 - Если demand.views_per_day_status = "insufficient" — суточный прогноз не строй вообще: в отчёте дословно «${INSUFFICIENT_DAILY_NOTE}», без строк дневного трафика и без чисел «в день».
 - Если views_per_day_status = "ok", но views_per_day_projected_median = 0 — дневной трафик 0, не выдумывай.
 
@@ -55,7 +56,7 @@ export const SYSTEM_PROMPT = `Ты — Senior Data Analyst и стратег п�
 - Если unclassified_count > 0 — добавь отдельную строку вида «Unclassified (цена не указана/условная) (n=X)», где X = unclassified_count. Сумма всех n (ярусы всех сегментов + Unclassified) равна file.valid_rows.
 - Кластеры покупателей (кто ищет, исходя из текстов).
 - Топ-5 УТП конкурентов (что пишут 80% продавцов).
-- Инсайт рынка: укажи на техническую или смысловую деталь, которую упоминает лишь малая часть продавцов (или никто), но она критична для качества. Каждый инсайт — строго отдельной строкой вида «- Инсайт рынка: …» (ровно с этим маркером, он нужен для автосборки отчёта). Цифры в инсайте — только из метрик JSON; если данных не хватает — напиши «Недостаточно данных…».
+- Инсайт рынка: конкретный технический или смысловой паттерн из samples и top_titles — что упоминают единицы продавцов и что критично для качества, которого не хватает большинству. Каждый инсайт — строго отдельной строкой вида «- Инсайт рынка: …» (ровно с этим маркером, он нужен для автосборки отчёта). Цифры в инсайте — только из метрик JSON. Если явных неочевидных паттернов в данных нет — дословно «Явных неочевидных паттернов не выявлено». Формулировки вида «Недостаточно данных для выявления…» в строке инсайта запрещены: либо конкретный паттерн, либо честное «Явных неочевидных паттернов не выявлено».
 
 #### Экран 3. Рекламные гипотезы (Что тестировать)
 Сгенерируй 3-4 гипотезы, отстраивающиеся от шаблонного рынка.
@@ -73,17 +74,18 @@ export const SYSTEM_PROMPT = `Ты — Senior Data Analyst и стратег п�
 Требования к Экрану 4:
 - Маркетинговые клише запрещены, не используй дословно: ${FORBIDDEN_LIST}. Этот запрет распространяется на весь отчёт, включая «Целевая потребность», «Главный аргумент», заголовки и тексты концептов: любое вхождение заменяй на факт из файла.
 - Вместо воды — фактура из данных: виды материала/сырья, плотность/толщина, тип подложки/основы, сроки изготовления и поставки, гарантии и условия, единицы измерения. Если фактуры в данных нет — не выдумывай, действует правило 1.
-- B2B-заголовок: без слова «Опт», по формуле [Товар/Услуга] + [Сфера применения] + [Главная выгода для бизнеса].
-- Пара BAD → GOOD (подставляй свои значения из данных, нишевые слова из примера не переноси):
-  BAD: «Лучший [Изделие] на рынке — индивидуальный подход и гарантия».
-  GOOD: «[Товар/Услуга] из [Материал] для [Сфера применения] — [Главная выгода для бизнеса] за [Срок]».
+- B2B-заголовок: запрещено слово «Опт» во всех словоформах (опт, опта, оптовая, оптовый, оптом) — не только в чистом виде; формула: [Товар/Услуга] + [Сфера применения] + [Главная выгода для бизнеса].
+- Пары BAD → GOOD (подставляй свои значения из данных, нишевые слова из примера не переноси):
+  BAD: «Лучший [Изделие] на рынке — индивидуальный подход и гарантия» → GOOD: «[Товар/Услуга] из [Материал] для [Сфера применения] — [Главная выгода для бизнеса] за [Срок]».
+  BAD: «Оптовая закупка [Изделия] — выгодные условия для бизнеса» → GOOD: «[Товар/Услуга] из [Материал] для [Сфера применения] — [Главная выгода для бизнеса] за [Срок]».
+  BAD: «Уникальное [Изделие] ручной работы» → GOOD: «[Товар/Услуга] из [Материал] — [Фактура/Характеристика] для [Сфера применения]».
 
 #### Экран 5. Стратегия визуалов
 Предложи идеи для фото/видео под каждую гипотезу (например, «Фото До/После», «Макро-съемка текстуры/процесса», «Инфографика с размерами/этапами»).
 
 #### Экран 6. Перспективы входа в нишу
 Оцени, что реально может получить новое объявление при правильном позиционировании, если мы заходим в эту нишу:
-- Дневной трафик: строка строго вида «${DAILY_TRAFFIC_PREFIX} X просмотров (грубая линейная оценка)», где X = demand.views_per_day_projected_median (округлённо до целых). X никогда больше demand.views_per_day_projected_max. Это грубая линейная оценка — так и подпиши.
+- Дневной трафик: строка строго вида «${DAILY_TRAFFIC_PREFIX} X просмотров (грубая линейная оценка)», где X = demand.views_per_day_projected_median (округлённо до целых). Запрещено подставлять в X demand.views_today_median, demand.views_today_sum или сырые «Просмотры сегодня» — это не дневной трафик. X никогда больше demand.views_per_day_projected_max. Это грубая линейная оценка — так и подпиши. Финальное число в этой строке сервер подставит автоматически из метрик.
 - Если demand.views_per_day_status = "insufficient" — вместо строки дневного трафика дословно «${INSUFFICIENT_DAILY_NOTE}», никаких чисел «в день» и никаких дневных расчётов.
 - Накопленный коридор — из demand.views_total_median с явной пометкой, что это накопленные просмотры за жизнь объявления (возраст объявлений неизвестен), плюс share_with_views_today и promotion.
 - Шанс попасть в топ: avg_position (средняя позиция) и top10_share, сколько продавцов держит топ и насколько конкурентны их объявления (цена, продвижение, накопленные просмотры). «Медиана позиции» не используется.
@@ -228,6 +230,60 @@ function spliceInsight(draft: string, criticReply: string): string | null {
   return kept.join("\n");
 }
 
+function pluralViews(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return "просмотр";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14))
+    return "просмотра";
+  return "просмотров";
+}
+
+function buildDailyTrafficLine(metrics: AggregatedMetrics): string {
+  const demand = metrics.demand;
+  if (demand.views_per_day_status !== "ok") return INSUFFICIENT_DAILY_NOTE;
+  const x = Math.round(demand.views_per_day_projected_median ?? 0);
+  return `${DAILY_TRAFFIC_PREFIX} ${x} ${pluralViews(x)} (грубая линейная оценка)`;
+}
+
+function screen6InsertIndex(lines: string[]): number {
+  const idx = lines.findIndex((line) => /^####\s*Экран 6/i.test(line));
+  return idx === -1 ? lines.length : idx + 1;
+}
+
+function applyDailyTrafficLine(
+  report: string,
+  metrics: AggregatedMetrics
+): string {
+  const stem = DAILY_TRAFFIC_PREFIX.replace(/:$/, "");
+  const kept: string[] = [];
+  let firstTemplateAt = -1;
+  let bulletPrefix = "- ";
+
+  for (const line of report.split("\n")) {
+    if (line.includes(stem)) {
+      if (firstTemplateAt === -1) {
+        firstTemplateAt = kept.length;
+        bulletPrefix = line.match(/^(\s*(?:[-*—]\s*)?)/)?.[1] ?? "- ";
+      }
+      continue;
+    }
+    kept.push(line);
+  }
+
+  const anchor =
+    firstTemplateAt !== -1 ? firstTemplateAt : screen6InsertIndex(kept);
+  const prefix = firstTemplateAt !== -1 ? bulletPrefix : "- ";
+
+  if (metrics.demand.views_per_day_status === "ok") {
+    kept.splice(anchor, 0, `${prefix}${buildDailyTrafficLine(metrics)}`);
+  } else if (!kept.some((line) => line.includes(INSUFFICIENT_DAILY_NOTE))) {
+    kept.splice(anchor, 0, `${prefix}${INSUFFICIENT_DAILY_NOTE}`);
+  }
+
+  return kept.join("\n");
+}
+
 export async function generateReport(
   metrics: AggregatedMetrics
 ): Promise<GeneratedReport> {
@@ -272,6 +328,7 @@ export async function generateReport(
     warnings.push(`Self-correction не выполнен: ${reason}`);
   }
 
+  report = applyDailyTrafficLine(report, metrics);
   warnings.push(...validateReport(report, metrics));
   return { report, warnings };
 }
