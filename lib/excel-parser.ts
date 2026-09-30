@@ -89,6 +89,20 @@ export interface AgeStats {
   median_days: number;
 }
 
+export interface QuadrantCell {
+  count: number;
+  examples: string[];
+}
+
+export interface Quadrants {
+  threshold_views_today: number;
+  threshold_views_total: number;
+  strong_stable: QuadrantCell;
+  stable_weak_now: QuadrantCell;
+  rising_fast: QuadrantCell;
+  new_or_weak: QuadrantCell;
+}
+
 export interface AggregatedMetrics {
   file: {
     total_rows: number;
@@ -108,8 +122,10 @@ export interface AggregatedMetrics {
   };
   demand: {
     views_today_sum: number;
+    views_today_median: number;
     share_with_views_today: number;
     views_total_sum: number;
+    views_total_median: number;
     views_per_day: ViewsPerDayStats | null;
     age: AgeStats | null;
   };
@@ -131,6 +147,7 @@ export interface AggregatedMetrics {
   samples: Sample[];
   text_signals: Record<string, TextSignalStat>;
   segment_rules: SegmentRule[];
+  quadrants: Quadrants;
   rows: RowBrief[];
 }
 
@@ -607,6 +624,51 @@ export function parseAndAggregate(
     return { segment, rule: SEGMENT_RULE_TEXT[segment], examples };
   });
 
+  const thresholdViewsToday = round2(median(viewsToday));
+  const thresholdViewsTotal = round2(median(viewsTotal));
+  const cells: Record<
+    "strong_stable" | "stable_weak_now" | "rising_fast" | "new_or_weak",
+    QuadrantCell
+  > = {
+    strong_stable: { count: 0, examples: [] },
+    stable_weak_now: { count: 0, examples: [] },
+    rising_fast: { count: 0, examples: [] },
+    new_or_weak: { count: 0, examples: [] },
+  };
+  for (const row of valid) {
+    const highDaily = row.views_today > thresholdViewsToday;
+    const highTotal = row.views_total > thresholdViewsTotal;
+    const key = highDaily
+      ? highTotal
+        ? "strong_stable"
+        : "rising_fast"
+      : highTotal
+        ? "stable_weak_now"
+        : "new_or_weak";
+    cells[key].count += 1;
+    if (
+      cells[key].examples.length < 3 &&
+      !cells[key].examples.includes(row.title)
+    ) {
+      cells[key].examples.push(row.title.slice(0, 80));
+    }
+  }
+  const quadrantSum =
+    cells.strong_stable.count +
+    cells.stable_weak_now.count +
+    cells.rising_fast.count +
+    cells.new_or_weak.count;
+  if (quadrantSum !== valid.length) {
+    throw new Error(
+      "Внутренняя ошибка агрегации: квадранты не сходятся к числу строк"
+    );
+  }
+  const quadrants: Quadrants = {
+    threshold_views_today: thresholdViewsToday,
+    threshold_views_total: thresholdViewsTotal,
+    ...cells,
+  };
+
   const rowsBrief: RowBrief[] =
     valid.length > 200
       ? []
@@ -645,11 +707,13 @@ export function parseAndAggregate(
     },
     demand: {
       views_today_sum: viewsToday.reduce((sum, v) => sum + v, 0),
+      views_today_median: round2(median(viewsToday)),
       share_with_views_today: ratio(
         viewsToday.filter((v) => v > 0).length,
         valid.length
       ),
       views_total_sum: viewsTotal.reduce((sum, v) => sum + v, 0),
+      views_total_median: round2(median(viewsTotal)),
       views_per_day: viewsPerDay,
       age: ageStats,
     },
@@ -672,6 +736,7 @@ export function parseAndAggregate(
     samples,
     text_signals: textSignals,
     segment_rules: segmentRules,
+    quadrants,
     rows: rowsBrief,
   };
 }

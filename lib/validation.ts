@@ -26,6 +26,8 @@ export const parseTimeSchema = z
 const DEMAND_STEM = DEMAND_LINE_PREFIX.replace(/:$/, "");
 const DAILY_SPEED_PATTERN = /\d+\s*просмотр\w*\s*(?:в день|\/\s*день)/i;
 const MEDIAN_IN_LINE_PATTERN = /медиана\s+(\d+(?:[.,]\d+)?)/i;
+const ACCUM_MEDIAN_PATTERN =
+  /накопленных просмотров медиана\s+(\d+(?:[.,]\d+)?)/i;
 const MARKER_LINE_PATTERN = /(?:Наблюдение|Паттерн):/;
 
 export function validateReport(
@@ -82,6 +84,25 @@ export function validateReport(
             `Медиана дневной скорости в отчёте (${value}) не совпадает с расчётной (${viewsPerDay.median}): сигнал бага сборки строки`
           );
         }
+      }
+    }
+
+    const accumMatch = ACCUM_MEDIAN_PATTERN.exec(line);
+    if (!accumMatch) {
+      warnings.push(
+        `В строке «${DEMAND_STEM}» не найдена медиана накопленных просмотров`
+      );
+    } else {
+      const accumValue = Number(accumMatch[1].replace(",", "."));
+      const expected = metrics.demand.views_total_median;
+      if (!Number.isFinite(accumValue)) {
+        warnings.push(
+          `Медиана накопленных просмотров в строке «${DEMAND_STEM}» не распознана как число`
+        );
+      } else if (Math.abs(accumValue - expected) > 0.011) {
+        warnings.push(
+          `Накопленные просмотры в строке «${DEMAND_STEM}» (${accumValue}) не совпадают с расчётной медианой (${expected}): сигнал бага сборки строки`
+        );
       }
     }
   }
