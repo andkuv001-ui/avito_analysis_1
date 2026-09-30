@@ -103,3 +103,4 @@ export const TEXT_SIGNALS: TextSignal[] = [
 ];
 
 export const DEMAND_LINE_PREFIX = "Срез спроса:";
+export const QUADRANTS_LINE_PREFIX = "Пороги квадрантов:";

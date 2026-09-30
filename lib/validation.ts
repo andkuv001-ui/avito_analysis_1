@@ -5,6 +5,7 @@ import {
   HEADLINE_LINE_REGEX,
   MAX_FILE_SIZE,
   OPT_WORD_REGEX,
+  QUADRANTS_LINE_PREFIX,
 } from "./constants";
 import type { AggregatedMetrics } from "./excel-parser";
 
@@ -24,10 +25,14 @@ export const parseTimeSchema = z
   .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Укажите время выгрузки в формате ЧЧ:ММ");
 
 const DEMAND_STEM = DEMAND_LINE_PREFIX.replace(/:$/, "");
+const QUADRANTS_STEM = QUADRANTS_LINE_PREFIX.replace(/:$/, "");
 const DAILY_SPEED_PATTERN = /\d+\s*просмотр\w*\s*(?:в день|\/\s*день)/i;
 const MEDIAN_IN_LINE_PATTERN = /медиана\s+(\d+(?:[.,]\d+)?)/i;
 const ACCUM_MEDIAN_PATTERN =
   /накопленных просмотров медиана\s+(\d+(?:[.,]\d+)?)/i;
+const THR_TODAY_PATTERN =
+  /высокая активность — более (\d+(?:[.,]\d+)?) просмотров сегодня/i;
+const THR_TOTAL_PATTERN = /много накопленных — более (\d+(?:[.,]\d+)?)/i;
 const MARKER_LINE_PATTERN = /(?:Наблюдение|Паттерн):/;
 
 export function validateReport(
@@ -104,6 +109,31 @@ export function validateReport(
           `Накопленные просмотры в строке «${DEMAND_STEM}» (${accumValue}) не совпадают с расчётной медианой (${expected}): сигнал бага сборки строки`
         );
       }
+    }
+  }
+
+  const thrLines = report
+    .split("\n")
+    .filter((line) => line.includes(QUADRANTS_STEM));
+  if (thrLines.length !== 1) {
+    warnings.push(
+      `В отчёте должно быть ровно 1 строка со стемом «${QUADRANTS_STEM}», найдено: ${thrLines.length}`
+    );
+  } else {
+    const line = thrLines[0];
+    const todayMatch = THR_TODAY_PATTERN.exec(line);
+    const totalMatch = THR_TOTAL_PATTERN.exec(line);
+    const expectedToday = metrics.quadrants.threshold_views_today;
+    const expectedTotal = metrics.quadrants.threshold_views_total;
+    if (!todayMatch || Number(todayMatch[1].replace(",", ".")) !== expectedToday) {
+      warnings.push(
+        `Порог активности в строке «${QUADRANTS_STEM}» не совпадает с расчётным (${expectedToday}): сигнал бага сборки строки`
+      );
+    }
+    if (!totalMatch || Number(totalMatch[1].replace(",", ".")) !== expectedTotal) {
+      warnings.push(
+        `Порог накопленных в строке «${QUADRANTS_STEM}» не совпадает с расчётным (${expectedTotal}): сигнал бага сборки строки`
+      );
     }
   }
 

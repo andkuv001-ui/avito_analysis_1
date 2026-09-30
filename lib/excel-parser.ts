@@ -312,6 +312,18 @@ function ratio(part: number, total: number): number {
   return total === 0 ? 0 : round2(part / total);
 }
 
+function signalFragment(text: string, regex: RegExp): string | null {
+  const match = regex.exec(text);
+  if (!match) return null;
+  const start = Math.max(0, match.index - 25);
+  const end = Math.min(
+    text.length,
+    Math.max(match.index + match[0].length, start + 80)
+  );
+  const frag = text.slice(start, end).replace(/\s+/g, " ").trim();
+  return `${start > 0 ? "…" : ""}${frag}${end < text.length ? "…" : ""}`;
+}
+
 function topCategories(
   rows: ValidRow[],
   key: "category_3" | "category_4",
@@ -598,8 +610,10 @@ export function parseAndAggregate(
       const text = `${row.title} ${row.description_excerpt}`;
       if (!signal.regex.test(text)) continue;
       count += 1;
-      if (examples.length < 3 && !examples.includes(row.title)) {
-        examples.push(row.title.slice(0, 80));
+      if (examples.length >= 3) continue;
+      const fragment = signalFragment(text, signal.regex);
+      if (fragment && !examples.includes(fragment)) {
+        examples.push(fragment.slice(0, 100));
       }
     }
     textSignals[signal.key] = {
