@@ -1,9 +1,12 @@
 import * as XLSX from "xlsx";
 import {
+  DATE_COLUMN_CANDIDATES,
   MAX_ROWS,
-  MIN_HOURS_FOR_DAILY_FORECAST,
   MIN_VALID_ROWS,
+  PER_UNIT_REGEX,
   REQUIRED_COLUMNS,
+  SERVICE_REGEX,
+  TEXT_SIGNALS,
 } from "./constants";
 import { classify, type Segment } from "./segmenter";
 
@@ -47,6 +50,45 @@ export interface Sample {
   description_excerpt: string;
 }
 
+export interface RowBrief {
+  title: string;
+  price: number;
+  segment: Segment;
+  seller: string;
+  position: number | null;
+  views_today: number;
+  views_total: number;
+  age_days: number | null;
+  description_excerpt: string;
+}
+
+export interface TextSignalStat {
+  count: number;
+  share: number;
+  examples: string[];
+}
+
+export interface SegmentRule {
+  segment: Segment;
+  rule: string;
+  examples: string[];
+}
+
+export interface ViewsPerDayStats {
+  n: number;
+  min: number;
+  p25: number;
+  median: number;
+  p75: number;
+  max: number;
+  basis: "views_total/max(age_days,1)";
+}
+
+export interface AgeStats {
+  n: number;
+  median_days: number;
+}
+
 export interface AggregatedMetrics {
   file: {
     total_rows: number;
@@ -66,12 +108,10 @@ export interface AggregatedMetrics {
   };
   demand: {
     views_today_sum: number;
-    views_today_median: number;
     share_with_views_today: number;
-    views_total_median: number;
-    views_per_day_projected_median: number | null;
-    views_per_day_projected_max: number | null;
-    views_per_day_status: "ok" | "insufficient";
+    views_total_sum: number;
+    views_per_day: ViewsPerDayStats | null;
+    age: AgeStats | null;
   };
   prices: Record<Segment, SegmentStats | null>;
   unclassified_count: number;
@@ -89,6 +129,9 @@ export interface AggregatedMetrics {
   };
   top_titles: TopTitle[];
   samples: Sample[];
+  text_signals: Record<string, TextSignalStat>;
+  segment_rules: SegmentRule[];
+  rows: RowBrief[];
 }
 
 type Row = Record<string, unknown>;
@@ -102,6 +145,7 @@ interface ValidRow {
   position: number | null;
   views_today: number;
   views_total: number;
+  age_days: number | null;
   paid: boolean;
   xl: boolean;
   verified: boolean;
@@ -148,6 +192,83 @@ function pickColumn(headers: string[], candidates: string[]): string | null {
 function value(row: Row, col: string | null): string {
   if (!col) return "";
   return String(row[col] ?? "").trim();
+}
+
+const EXCEL_EPOCH_OFFSET_MS = 25569 * 86400e3;
+
+function parseDateMs(v: unknown): number | null {
+  if (v instanceof Date) {
+    const t = v.getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  if (typeof v === "number" && Number.isFinite(v) && v > 0) {
+    return Math.round(v * 86400e3 - EXCEL_EPOCH_OFFSET_MS);
+  }
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+
+  const ru =
+    /^(\d{1,2})[./](\d{1,2})[./](\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/.exec(
+      s
+    );
+  if (ru) {
+    return Date.UTC(
+      Number(ru[3]),
+      Number(ru[2]) - 1,
+      Number(ru[1]),
+      Number(ru[4] ?? 0),
+      Number(ru[5] ?? 0),
+      Number(ru[6] ?? 0)
+    );
+  }
+
+  const iso =
+    /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?(Z|[+-]\d{2}:?\d{2})?$/.exec(
+      s
+    );
+  if (iso) {
+    if (iso[7]) {
+      const t = Date.parse(s);
+      return Number.isFinite(t) ? t : null;
+    }
+    return Date.UTC(
+      Number(iso[1]),
+      Number(iso[2]) - 1,
+      Number(iso[3]),
+      Number(iso[4] ?? 0),
+      Number(iso[5] ?? 0),
+      Number(iso[6] ?? 0)
+    );
+  }
+
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : null;
+}
+
+function buildExportTs(parsedAt: string): number {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(parsedAt);
+  const hours = match ? Number(match[1]) : 0;
+  const minutes = match ? Number(match[2]) : 0;
+  const now = new Date();
+  return Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+    hours,
+    minutes
+  );
+}
+
+function statsOf(sorted: number[]): Omit<ViewsPerDayStats, "basis"> | null {
+  if (sorted.length === 0) return null;
+  return {
+    n: sorted.length,
+    min: round2(sorted[0]),
+    p25: round2(percentile(sorted, 0.25)),
+    median: round2(percentile(sorted, 0.5)),
+    p75: round2(percentile(sorted, 0.75)),
+    max: round2(sorted[sorted.length - 1]),
+  };
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -229,7 +350,8 @@ export function parseAndAggregate(
   parsedAt: string
 ): AggregatedMetrics {
   const hoursSinceMidnight = parseTimeToHours(parsedAt);
-  const workbook = XLSX.read(buffer, { type: "buffer" });
+  const exportTs = buildExportTs(parsedAt);
+  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) throw new Error("Файл пустой или не содержит листов");
 
@@ -277,6 +399,7 @@ export function parseAndAggregate(
   ]);
   const colCat3 = pickColumn(headers, ["Категория 3", "категория 3"]);
   const colCat4 = pickColumn(headers, ["Категория 4", "категория 4"]);
+  const colDate = pickColumn(headers, [...DATE_COLUMN_CANDIDATES]);
 
   const valid: ValidRow[] = [];
   let skipped = 0;
@@ -295,6 +418,15 @@ export function parseAndAggregate(
     const paidRaw = value(row, colPaid);
     const verifiedRaw = value(row, colVerified);
 
+    let ageDays: number | null = null;
+    if (colDate) {
+      const publishedTs = parseDateMs(row[colDate]);
+      if (publishedTs !== null) {
+        const age = (exportTs - publishedTs) / 86400e3;
+        if (age > 0 && age <= 3650) ageDays = round2(age);
+      }
+    }
+
     valid.push({
       title,
       seller,
@@ -304,6 +436,7 @@ export function parseAndAggregate(
       position: toNum(value(row, colPosition)),
       views_today: toNum(value(row, colViewsToday)) ?? 0,
       views_total: toNum(value(row, colViewsTotal)) ?? 0,
+      age_days: ageDays,
       paid: paidRaw.length > 0,
       xl: paidRaw.toLowerCase().includes("xl"),
       verified: verifiedRaw.toLowerCase().includes("проверен"),
@@ -369,16 +502,24 @@ export function parseAndAggregate(
         )
       : null;
 
-  const dailyStatus: "ok" | "insufficient" =
-    hoursSinceMidnight >= MIN_HOURS_FOR_DAILY_FORECAST ? "ok" : "insufficient";
-  let projectedMedian: number | null = null;
-  let projectedMax: number | null = null;
-  if (dailyStatus === "ok") {
-    const projections = valid.map(
-      (row) => (row.views_today / hoursSinceMidnight) * 24
-    );
-    projectedMedian = round2(median(projections));
-    projectedMax = round2(Math.max(...projections));
+  const ages = valid
+    .map((row) => row.age_days)
+    .filter((v): v is number => v !== null);
+  const minDates = Math.max(3, valid.length / 2);
+  const datesOk = ages.length >= minDates;
+
+  let viewsPerDay: ViewsPerDayStats | null = null;
+  let ageStats: AgeStats | null = null;
+  if (datesOk) {
+    const speeds = valid
+      .filter((row) => row.age_days !== null)
+      .map((row) => row.views_total / Math.max(row.age_days as number, 1))
+      .sort((a, b) => a - b);
+    const speedStats = statsOf(speeds);
+    if (speedStats) {
+      viewsPerDay = { ...speedStats, basis: "views_total/max(age_days,1)" };
+    }
+    ageStats = { n: ages.length, median_days: round2(median(ages)) };
   }
 
   const statsBySeg: Record<Segment, SegmentStats | null> = {
@@ -428,6 +569,59 @@ export function parseAndAggregate(
     });
   }
 
+  const textSignals: Record<string, TextSignalStat> = {};
+  for (const signal of TEXT_SIGNALS) {
+    let count = 0;
+    const examples: string[] = [];
+    for (const row of valid) {
+      const text = `${row.title} ${row.description_excerpt}`;
+      if (!signal.regex.test(text)) continue;
+      count += 1;
+      if (examples.length < 3 && !examples.includes(row.title)) {
+        examples.push(row.title.slice(0, 80));
+      }
+    }
+    textSignals[signal.key] = {
+      count,
+      share: ratio(count, valid.length),
+      examples,
+    };
+  }
+
+  const SEGMENT_RULE_TEXT: Record<Segment, string> = {
+    per_unit: `цена за единицу измерения в тексте: ${PER_UNIT_REGEX}`,
+    service: `услуга/работа в тексте: ${SERVICE_REGEX}`,
+    product: "не подходит под правила per_unit и service — готовые товары",
+  };
+  const segmentRules: SegmentRule[] = (
+    ["per_unit", "service", "product"] as const
+  ).map((segment) => {
+    const examples: string[] = [];
+    for (const row of valid) {
+      if (row.segment !== segment) continue;
+      if (examples.length < 3 && !examples.includes(row.title)) {
+        examples.push(row.title.slice(0, 80));
+      }
+      if (examples.length >= 3) break;
+    }
+    return { segment, rule: SEGMENT_RULE_TEXT[segment], examples };
+  });
+
+  const rowsBrief: RowBrief[] =
+    valid.length > 200
+      ? []
+      : valid.map((row) => ({
+          title: row.title,
+          price: row.price,
+          segment: row.segment,
+          seller: row.seller,
+          position: row.position,
+          views_today: row.views_today,
+          views_total: row.views_total,
+          age_days: row.age_days,
+          description_excerpt: row.description_excerpt.slice(0, 200),
+        }));
+
   return {
     file: {
       total_rows: rows.length,
@@ -451,15 +645,13 @@ export function parseAndAggregate(
     },
     demand: {
       views_today_sum: viewsToday.reduce((sum, v) => sum + v, 0),
-      views_today_median: round2(median(viewsToday)),
       share_with_views_today: ratio(
         viewsToday.filter((v) => v > 0).length,
         valid.length
       ),
-      views_total_median: round2(median(viewsTotal)),
-      views_per_day_projected_median: projectedMedian,
-      views_per_day_projected_max: projectedMax,
-      views_per_day_status: dailyStatus,
+      views_total_sum: viewsTotal.reduce((sum, v) => sum + v, 0),
+      views_per_day: viewsPerDay,
+      age: ageStats,
     },
     prices: statsBySeg,
     unclassified_count: unclassifiedCount,
@@ -478,5 +670,8 @@ export function parseAndAggregate(
     },
     top_titles: topTitles,
     samples,
+    text_signals: textSignals,
+    segment_rules: segmentRules,
+    rows: rowsBrief,
   };
 }

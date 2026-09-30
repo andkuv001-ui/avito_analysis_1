@@ -28,7 +28,7 @@ interface ReportMeta {
   skipped_rows: number;
   unique_sellers: number;
   parsed_at: string;
-  views_per_day_status: "ok" | "insufficient";
+  has_views_per_day: boolean;
   report_warnings: string[];
 }
 
@@ -172,7 +172,7 @@ export function ReportForm() {
               />
               <p className="text-sm text-muted-foreground">
                 ЧЧ:ММ по часам счётчика «Просмотров сегодня» (момент
-                выгрузки). До 08:00 суточный прогноз не строится.
+                выгрузки, UTC).
               </p>
             </div>
             <Button

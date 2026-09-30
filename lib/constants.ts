@@ -24,6 +24,10 @@ export const FORBIDDEN_PHRASES = [
   "индивидуальный подход",
   "высокое качество",
   "уникальн",
+  "шанс попасть в топ",
+  "умеренный интерес",
+  "гарантируем",
+  "гарантия результата",
 ] as const;
 
 export const OPT_WORD_REGEX =
@@ -31,7 +35,71 @@ export const OPT_WORD_REGEX =
 
 export const HEADLINE_LINE_REGEX = /^\s*[-*]\s*.*Заголовок/i;
 
-export const DAILY_TRAFFIC_PREFIX = "Ожидаемый дневной трафик:";
-export const INSUFFICIENT_DAILY_NOTE =
-  "Недостаточно данных для суточного прогноза";
-export const MIN_HOURS_FOR_DAILY_FORECAST = 8;
+export const DATE_COLUMN_CANDIDATES = [
+  "Дата публикации",
+  "Дата размещения",
+  "Размещено",
+  "Опубликовано",
+  "Дата",
+] as const;
+
+export interface TextSignal {
+  key: string;
+  label: string;
+  regex: RegExp;
+}
+
+export const TEXT_SIGNALS: TextSignal[] = [
+  {
+    key: "made_to_order",
+    label: "индивидуальный размер / под заказ",
+    regex: /индивидуальн\w*|по (?:вашим |ваши )?размер\w*|люб\w+ размер\w*|под заказ|по мерк\w*/i,
+  },
+  {
+    key: "dimensions",
+    label: "конкретные размеры в тексте",
+    regex: /\d{2,4}\s*[xх×]\s*\d{2,4}/,
+  },
+  {
+    key: "guarantee_lifespan",
+    label: "гарантия / заявленный срок сохранения",
+    regex: /гаранти\w*|\d{1,2}\s*лет|не выцветает|не пересыхает/i,
+  },
+  {
+    key: "no_care",
+    label: "без ухода / полива",
+    regex: /не требует ухода|без ухода|не нуждает\w* в уходе|без полива/i,
+  },
+  {
+    key: "b2b",
+    label: "B2B / коммерческие объекты",
+    regex: /юр\w*\.?\s*лиц|юридическ\w*|для бизнеса|коммерческ\w*|офис\w*|b2b/i,
+  },
+  {
+    key: "delivery",
+    label: "доставка",
+    regex: /доставк\w*/i,
+  },
+  {
+    key: "install",
+    label: "монтаж / под ключ",
+    regex: /монтаж|установк\w*|под ключ/i,
+  },
+  {
+    key: "visual_extras",
+    label: "подсветка / рама / логотип",
+    regex: /подсветк\w*|без рамы|рам[аы]|логотип/i,
+  },
+  {
+    key: "gift",
+    label: "подарочная подача",
+    regex: /подар\w+|новоселье|день рождения|корпоратив\w*/i,
+  },
+  {
+    key: "cta",
+    label: "призывы к действию",
+    regex: /оставьте заявку|позвоните|напишите|закажите|рассчита\w*/i,
+  },
+];
+
+export const DEMAND_LINE_PREFIX = "Срез спроса:";

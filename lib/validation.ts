@@ -1,9 +1,8 @@
 import { z } from "zod";
 import {
-  DAILY_TRAFFIC_PREFIX,
+  DEMAND_LINE_PREFIX,
   FORBIDDEN_PHRASES,
   HEADLINE_LINE_REGEX,
-  INSUFFICIENT_DAILY_NOTE,
   MAX_FILE_SIZE,
   OPT_WORD_REGEX,
 } from "./constants";
@@ -24,10 +23,10 @@ export const parseTimeSchema = z
   .string()
   .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Укажите время выгрузки в формате ЧЧ:ММ");
 
-const DAILY_TRAFFIC_LINE_REGEX = new RegExp(
-  `${DAILY_TRAFFIC_PREFIX}\\s*(\\d+(?:[.,]\\d+)?)\\s*просмотр[а-яё]*`,
-  "gi"
-);
+const DEMAND_STEM = DEMAND_LINE_PREFIX.replace(/:$/, "");
+const DAILY_SPEED_PATTERN = /\d+\s*просмотр\w*\s*(?:в день|\/\s*день)/i;
+const MEDIAN_IN_LINE_PATTERN = /медиана\s+(\d+(?:[.,]\d+)?)/i;
+const MARKER_LINE_PATTERN = /(?:Наблюдение|Паттерн):/;
 
 export function validateReport(
   report: string,
@@ -50,45 +49,47 @@ export function validateReport(
     warnings.push('В заголовке запрещено слово «опт» (включая словоформы)');
   }
 
-  const trafficLines = [...report.matchAll(DAILY_TRAFFIC_LINE_REGEX)];
-  const status = metrics.demand.views_per_day_status;
-
-  if (status === "ok") {
-    if (trafficLines.length === 0) {
-      warnings.push(
-        `В отчёте отсутствует строка «${DAILY_TRAFFIC_PREFIX} X просмотров»`
-      );
+  const demandLines = report
+    .split("\n")
+    .filter((line) => line.includes(DEMAND_STEM));
+  if (demandLines.length !== 1) {
+    warnings.push(
+      `В отчёте должно быть ровно 1 строка со стемом «${DEMAND_STEM}», найдено: ${demandLines.length}`
+    );
+  } else {
+    const line = demandLines[0];
+    const viewsPerDay = metrics.demand.views_per_day;
+    if (!viewsPerDay) {
+      if (DAILY_SPEED_PATTERN.test(line)) {
+        warnings.push(
+          `Строка «${DEMAND_STEM}» содержит число дневной скорости при отсутствии данных о возрасте объявлений`
+        );
+      }
     } else {
-      const cap = metrics.demand.views_per_day_projected_max ?? 0;
-      const expected = Math.round(
-        metrics.demand.views_per_day_projected_median ?? 0
-      );
-      for (const match of trafficLines) {
-        const value = Number(match[1].replace(",", "."));
+      const medianMatch = MEDIAN_IN_LINE_PATTERN.exec(line);
+      if (!medianMatch) {
+        warnings.push(
+          `В строке «${DEMAND_STEM}» не найдена медиана дневной скорости`
+        );
+      } else {
+        const value = Number(medianMatch[1].replace(",", "."));
         if (!Number.isFinite(value)) {
           warnings.push(
-            `Дневной трафик в отчёте не распознан как число: «${match[0]}»`
+            `Медиана дневной скорости в строке «${DEMAND_STEM}» не распознана как число`
           );
-        } else if (value > cap) {
+        } else if (Math.abs(value - viewsPerDay.median) > 0.011) {
           warnings.push(
-            `Дневной трафик в отчёте (${value}) превышает расчётный максимум (${cap})`
-          );
-        } else if (value !== expected) {
-          warnings.push(
-            `Число дневного трафика (${value}) не совпадает с расчётной медианой проекции (${expected}): сигнал бага сборки строки`
+            `Медиана дневной скорости в отчёте (${value}) не совпадает с расчётной (${viewsPerDay.median}): сигнал бага сборки строки`
           );
         }
       }
     }
-  } else {
-    if (!report.includes(INSUFFICIENT_DAILY_NOTE)) {
+  }
+
+  for (const line of report.split("\n")) {
+    if (MARKER_LINE_PATTERN.test(line) && !/\d/.test(line)) {
       warnings.push(
-        `В отчёте отсутствует фраза «${INSUFFICIENT_DAILY_NOTE}»`
-      );
-    }
-    if (trafficLines.length > 0) {
-      warnings.push(
-        "В отчёте есть строка дневного трафика при недостаточных данных для прогноза"
+        `Утверждение без числового подтверждения: «${line.trim().slice(0, 100)}»`
       );
     }
   }

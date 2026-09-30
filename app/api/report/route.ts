@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
         skipped_rows: metrics.file.skipped_rows,
         unique_sellers: metrics.market.unique_sellers,
         parsed_at: metrics.parse.parsed_at,
-        views_per_day_status: metrics.demand.views_per_day_status,
+        has_views_per_day: metrics.demand.views_per_day !== null,
         report_warnings: warnings,
       },
     });
