@@ -1,12 +1,5 @@
 import { z } from "zod";
-import {
-  DEMAND_LINE_PREFIX,
-  FORBIDDEN_PHRASES,
-  HEADLINE_LINE_REGEX,
-  MAX_FILE_SIZE,
-  OPT_WORD_REGEX,
-  QUADRANTS_LINE_PREFIX,
-} from "./constants";
+import { MAX_FILE_SIZE } from "./constants";
 import type { AggregatedMetrics } from "./excel-parser";
 
 export const reportFileSchema = z
@@ -24,136 +17,54 @@ export const parseTimeSchema = z
   .string()
   .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Укажите время выгрузки в формате ЧЧ:ММ");
 
-const DEMAND_STEM = DEMAND_LINE_PREFIX.replace(/:$/, "");
-const QUADRANTS_STEM = QUADRANTS_LINE_PREFIX.replace(/:$/, "");
-const DAILY_SPEED_PATTERN = /\d+\s*просмотр\w*\s*(?:в день|\/\s*день)/i;
-const MEDIAN_IN_LINE_PATTERN = /медиана\s+(\d+(?:[.,]\d+)?)/i;
-const ACCUM_MEDIAN_PATTERN =
-  /накопленных просмотров медиана\s+(\d+(?:[.,]\d+)?)/i;
-const THR_TODAY_PATTERN =
-  /высокая активность — более (\d+(?:[.,]\d+)?) просмотров сегодня/i;
-const THR_TOTAL_PATTERN = /много накопленных — более (\d+(?:[.,]\d+)?)/i;
-const MARKER_LINE_PATTERN = /(?:Наблюдение|Паттерн):/;
+const WHY_BLOCK_PATTERN = /\*\*Почему:\*\*/;
+const HYPOTHESIS_BLOCK_PATTERN = /\*\*Гипотеза:\*\*/;
 
 export function validateReport(
   report: string,
   metrics: AggregatedMetrics
 ): string[] {
   const warnings: string[] = [];
+  const lines = report.split("\n");
+  const clusters = metrics.clusters ?? [];
 
-  for (const phrase of FORBIDDEN_PHRASES) {
-    if (report.toLowerCase().includes(phrase.toLowerCase())) {
-      warnings.push(`В отчёте найдена запрещённая фраза: «${phrase}»`);
+  for (const cluster of clusters) {
+    const row = lines.find(
+      (line) => line.trimStart().startsWith("|") && line.includes(cluster.label)
+    );
+    if (!row) {
+      warnings.push(
+        `Кластер «${cluster.label}» в карте спроса без count=${cluster.count}`
+      );
+      continue;
+    }
+    if (!new RegExp(`\\b${cluster.count}\\b`).test(row)) {
+      warnings.push(
+        `Кластер «${cluster.label}» в карте спроса без count=${cluster.count}`
+      );
     }
   }
 
-  const hasOptHeadline = report
-    .split("\n")
-    .some(
-      (line) => HEADLINE_LINE_REGEX.test(line) && OPT_WORD_REGEX.test(line)
-    );
-  if (hasOptHeadline) {
-    warnings.push('В заголовке запрещено слово «опт» (включая словоформы)');
-  }
-
-  const demandLines = report
-    .split("\n")
-    .filter((line) => line.includes(DEMAND_STEM));
-  if (demandLines.length !== 1) {
+  const whyWithoutNumber = lines.filter(
+    (line) => WHY_BLOCK_PATTERN.test(line) && !/\d/.test(line)
+  );
+  for (const line of whyWithoutNumber) {
     warnings.push(
-      `В отчёте должно быть ровно 1 строка со стемом «${DEMAND_STEM}», найдено: ${demandLines.length}`
+      `Гипотеза без числового подтверждения: «${line.trim().slice(0, 100)}»`
     );
-  } else {
-    const line = demandLines[0];
-    const viewsPerDay = metrics.demand.views_per_day;
-    if (!viewsPerDay) {
-      if (DAILY_SPEED_PATTERN.test(line)) {
-        warnings.push(
-          `Строка «${DEMAND_STEM}» содержит число дневной скорости при отсутствии данных о возрасте объявлений`
-        );
-      }
-    } else {
-      const medianMatch = MEDIAN_IN_LINE_PATTERN.exec(line);
-      if (!medianMatch) {
-        warnings.push(
-          `В строке «${DEMAND_STEM}» не найдена медиана дневной скорости`
-        );
-      } else {
-        const value = Number(medianMatch[1].replace(",", "."));
-        if (!Number.isFinite(value)) {
-          warnings.push(
-            `Медиана дневной скорости в строке «${DEMAND_STEM}» не распознана как число`
-          );
-        } else if (Math.abs(value - viewsPerDay.median) > 0.011) {
-          warnings.push(
-            `Медиана дневной скорости в отчёте (${value}) не совпадает с расчётной (${viewsPerDay.median}): сигнал бага сборки строки`
-          );
-        }
-      }
-    }
-
-    const accumMatch = ACCUM_MEDIAN_PATTERN.exec(line);
-    if (!accumMatch) {
-      warnings.push(
-        `В строке «${DEMAND_STEM}» не найдена медиана накопленных просмотров`
-      );
-    } else {
-      const accumValue = Number(accumMatch[1].replace(",", "."));
-      const expected = metrics.demand.views_total_median;
-      if (!Number.isFinite(accumValue)) {
-        warnings.push(
-          `Медиана накопленных просмотров в строке «${DEMAND_STEM}» не распознана как число`
-        );
-      } else if (Math.abs(accumValue - expected) > 0.011) {
-        warnings.push(
-          `Накопленные просмотры в строке «${DEMAND_STEM}» (${accumValue}) не совпадают с расчётной медианой (${expected}): сигнал бага сборки строки`
-        );
-      }
-    }
   }
 
-  const thrLines = report
-    .split("\n")
-    .filter((line) => line.includes(QUADRANTS_STEM));
-  if (thrLines.length !== 1) {
+  const hypothesisCount = lines.filter((line) =>
+    HYPOTHESIS_BLOCK_PATTERN.test(line)
+  ).length;
+  if (hypothesisCount < 5) {
     warnings.push(
-      `В отчёте должно быть ровно 1 строка со стемом «${QUADRANTS_STEM}», найдено: ${thrLines.length}`
+      `Менее 5 гипотез в разделе 8: найдено блоков «Гипотеза» — ${hypothesisCount}`
     );
-  } else {
-    const line = thrLines[0];
-    const todayMatch = THR_TODAY_PATTERN.exec(line);
-    const totalMatch = THR_TOTAL_PATTERN.exec(line);
-    const expectedToday = metrics.quadrants.threshold_views_today;
-    const expectedTotal = metrics.quadrants.threshold_views_total;
-    if (!todayMatch || Number(todayMatch[1].replace(",", ".")) !== expectedToday) {
-      warnings.push(
-        `Порог активности в строке «${QUADRANTS_STEM}» не совпадает с расчётным (${expectedToday}): сигнал бага сборки строки`
-      );
-    }
-    if (!totalMatch || Number(totalMatch[1].replace(",", ".")) !== expectedTotal) {
-      warnings.push(
-        `Порог накопленных в строке «${QUADRANTS_STEM}» не совпадает с расчётным (${expectedTotal}): сигнал бага сборки строки`
-      );
-    }
-  }
-
-  for (const line of report.split("\n")) {
-    if (MARKER_LINE_PATTERN.test(line) && !/\d/.test(line)) {
-      warnings.push(
-        `Утверждение без числового подтверждения: «${line.trim().slice(0, 100)}»`
-      );
-    }
-  }
-
-  const unclassified = metrics.unclassified_count;
-  if (unclassified > 0) {
-    const hasLabel = report.includes("Unclassified");
-    const hasCount = report.includes(`n=${unclassified}`);
-    if (!hasLabel || !hasCount) {
-      warnings.push(
-        `В отчёте не указана строка Unclassified (n=${unclassified})`
-      );
-    }
+  } else if (hypothesisCount > 15) {
+    warnings.push(
+      `Более 15 гипотез в разделе 8: найдено блоков «Гипотеза» — ${hypothesisCount}`
+    );
   }
 
   return warnings;

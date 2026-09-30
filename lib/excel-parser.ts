@@ -4,11 +4,14 @@ import {
   MAX_ROWS,
   MIN_VALID_ROWS,
   PER_UNIT_REGEX,
+  QUERY_COLUMN_CANDIDATES,
+  REGION_COLUMN_CANDIDATES,
   REQUIRED_COLUMNS,
   SERVICE_REGEX,
   TEXT_SIGNALS,
 } from "./constants";
 import { classify, type Segment } from "./segmenter";
+import type { ClusterStat } from "./clusters";
 
 export interface PriceTiers {
   economy: number;
@@ -113,6 +116,10 @@ export interface AggregatedMetrics {
     parsed_at: string;
     hours_since_midnight: number;
   };
+  context: {
+    region: string | null;
+    query: string | null;
+  };
   market: {
     unique_sellers: number;
     verified_seller_share: number;
@@ -150,6 +157,8 @@ export interface AggregatedMetrics {
   segment_rules: SegmentRule[];
   quadrants: Quadrants;
   rows: RowBrief[];
+  cluster_source: Array<{ title: string; description: string }>;
+  clusters?: ClusterStat[];
 }
 
 type Row = Record<string, unknown>;
@@ -210,6 +219,13 @@ function pickColumn(headers: string[], candidates: string[]): string | null {
 function value(row: Row, col: string | null): string {
   if (!col) return "";
   return String(row[col] ?? "").trim();
+}
+
+function joinDistinct(values: Set<string>, cap = 5): string | null {
+  const list = [...values];
+  if (list.length === 0) return null;
+  if (list.length <= cap) return list.join(", ");
+  return `${list.slice(0, cap).join(", ")} и ещё ${list.length - cap}`;
 }
 
 const EXCEL_EPOCH_OFFSET_MS = 25569 * 86400e3;
@@ -430,8 +446,12 @@ export function parseAndAggregate(
   const colCat3 = pickColumn(headers, ["Категория 3", "категория 3"]);
   const colCat4 = pickColumn(headers, ["Категория 4", "категория 4"]);
   const colDate = pickColumn(headers, [...DATE_COLUMN_CANDIDATES]);
+  const colRegion = pickColumn(headers, [...REGION_COLUMN_CANDIDATES]);
+  const colQuery = pickColumn(headers, [...QUERY_COLUMN_CANDIDATES]);
 
   const valid: ValidRow[] = [];
+  const regionValues = new Set<string>();
+  const queryValues = new Set<string>();
   let skipped = 0;
 
   for (const row of rows) {
@@ -475,6 +495,11 @@ export function parseAndAggregate(
       category_3: value(row, colCat3),
       category_4: value(row, colCat4),
     });
+
+    const region = value(row, colRegion).replace(/\s+/g, " ");
+    if (region) regionValues.add(region);
+    const query = value(row, colQuery).replace(/\s+/g, " ");
+    if (query) queryValues.add(query);
   }
 
   if (valid.length < MIN_VALID_ROWS) {
@@ -712,6 +737,10 @@ export function parseAndAggregate(
       parsed_at: parsedAt,
       hours_since_midnight: round2(hoursSinceMidnight),
     },
+    context: {
+      region: joinDistinct(regionValues),
+      query: joinDistinct(queryValues),
+    },
     market: {
       unique_sellers: uniqueSellers,
       verified_seller_share: ratio(verifiedSellers, uniqueSellers),
@@ -756,5 +785,9 @@ export function parseAndAggregate(
     segment_rules: segmentRules,
     quadrants,
     rows: rowsBrief,
+    cluster_source: valid.map((row) => ({
+      title: row.title,
+      description: row.description_excerpt,
+    })),
   };
 }

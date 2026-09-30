@@ -82,7 +82,7 @@ export function ReportForm() {
     setLoading(true);
     setReport(null);
     setMeta(null);
-    const toastId = toast.loading("Анализируем нишу... до 3 минут");
+    const toastId = toast.loading("Анализируем выдачу... до 4 минут");
 
     try {
       const formData = new FormData();
