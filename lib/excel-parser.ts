@@ -136,8 +136,9 @@ export interface AggregatedMetrics {
     xl_share: number;
   };
   positions: {
-    avg_position: number | null;
-    top10_share: number | null;
+    top_count: number;
+    top_unique_sellers: number;
+    top_repeat_share: number;
   };
   categories: {
     category_3: CategoryShare[];
@@ -508,16 +509,19 @@ export function parseAndAggregate(
     if (row.price > 1) pricesBySeg[row.segment].push(row.price);
   }
 
-  const positions = valid
-    .map((row) => row.position)
-    .filter((v): v is number => v !== null);
-  const top10 = positions.filter((p) => p <= 10).length;
-  const avgPosition =
-    positions.length > 0
-      ? round2(
-          positions.reduce((sum, v) => sum + v, 0) / positions.length
-        )
-      : null;
+  const topRows = valid.filter(
+    (row) => row.position !== null && row.position <= 10
+  );
+  const topSellerCounts = new Map<string, number>();
+  for (const row of topRows) {
+    topSellerCounts.set(
+      row.seller,
+      (topSellerCounts.get(row.seller) ?? 0) + 1
+    );
+  }
+  const topRepeatRows = topRows.filter(
+    (row) => (topSellerCounts.get(row.seller) ?? 0) >= 2
+  ).length;
 
   const ages = valid
     .map((row) => row.age_days)
@@ -724,9 +728,9 @@ export function parseAndAggregate(
       xl_share: ratio(valid.filter((row) => row.xl).length, valid.length),
     },
     positions: {
-      avg_position: avgPosition,
-      top10_share:
-        positions.length > 0 ? ratio(top10, positions.length) : null,
+      top_count: topRows.length,
+      top_unique_sellers: topSellerCounts.size,
+      top_repeat_share: ratio(topRepeatRows, topRows.length),
     },
     categories: {
       category_3: topCategories(valid, "category_3", 5),
