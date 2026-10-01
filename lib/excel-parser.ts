@@ -106,6 +106,13 @@ export interface Quadrants {
   new_or_weak: QuadrantCell;
 }
 
+export interface FreshnessStats {
+  listings: number;
+  views_today_avg: number | null;
+  views_today_min: number | null;
+  views_today_max: number | null;
+}
+
 export interface AggregatedMetrics {
   file: {
     total_rows: number;
@@ -141,6 +148,17 @@ export interface AggregatedMetrics {
   promotion: {
     paid_share: number;
     xl_share: number;
+  };
+  forecast: {
+    views_today_avg: number;
+    views_today_avg_paid: number | null;
+    views_today_avg_organic: number | null;
+    views_today_min: number;
+    views_today_max: number;
+    paid_listings: number;
+    organic_listings: number;
+    age_2_days: FreshnessStats;
+    age_5_days: FreshnessStats;
   };
   positions: {
     top_count: number;
@@ -537,6 +555,29 @@ export function parseAndAggregate(
   const viewsToday = valid.map((row) => row.views_today);
   const viewsTotal = valid.map((row) => row.views_total);
 
+  const paidViewsToday = valid
+    .filter((row) => row.paid)
+    .map((row) => row.views_today);
+  const organicViewsToday = valid
+    .filter((row) => !row.paid)
+    .map((row) => row.views_today);
+  const avgOf = (values: number[]): number | null =>
+    values.length === 0
+      ? null
+      : round2(values.reduce((sum, v) => sum + v, 0) / values.length);
+
+  const freshnessStats = (day: number): FreshnessStats => {
+    const views = valid
+      .filter((row) => row.age_days !== null && Math.floor(row.age_days) === day)
+      .map((row) => row.views_today);
+    return {
+      listings: views.length,
+      views_today_avg: avgOf(views),
+      views_today_min: views.length > 0 ? Math.min(...views) : null,
+      views_today_max: views.length > 0 ? Math.max(...views) : null,
+    };
+  };
+
   const pricesBySeg: Record<Segment, number[]> = {
     per_unit: [],
     service: [],
@@ -769,6 +810,17 @@ export function parseAndAggregate(
     promotion: {
       paid_share: ratio(valid.filter((row) => row.paid).length, valid.length),
       xl_share: ratio(valid.filter((row) => row.xl).length, valid.length),
+    },
+    forecast: {
+      views_today_avg: avgOf(viewsToday) ?? 0,
+      views_today_avg_paid: avgOf(paidViewsToday),
+      views_today_avg_organic: avgOf(organicViewsToday),
+      views_today_min: viewsToday.length > 0 ? Math.min(...viewsToday) : 0,
+      views_today_max: viewsToday.length > 0 ? Math.max(...viewsToday) : 0,
+      paid_listings: paidViewsToday.length,
+      organic_listings: organicViewsToday.length,
+      age_2_days: freshnessStats(2),
+      age_5_days: freshnessStats(5),
     },
     positions: {
       top_count: topRows.length,
